@@ -9,6 +9,7 @@ import json
 import logging
 import os
 import random
+import unicodedata
 import warnings
 from pathlib import Path
 
@@ -36,6 +37,14 @@ BLACKLIST_SITES = {
     "linkedin.com", "facebook.com", "twitter.com", "instagram.com",
     "wikipedia.org", "youtube.com", "kompass.com", "europages.fr",
     "annuaire.fr", "annuaire-mairie.fr", "annuaires.fr", "corporate.com",
+}
+
+# Mots trop génériques pour inférer un domaine
+MOTS_EXCLUS_DOMAINE = {
+    "groupe", "sarl", "sas", "sasu", "sci", "eurl", "gmbh", "ste", "ets",
+    "societe", "association", "commune", "mairie", "syndicat", "union",
+    "federation", "gie", "spa", "les", "des", "pour", "avec", "sans",
+    "par", "sur", "sous", "services", "service", "solutions", "france",
 }
 
 BLACKLIST_EMAILS = {
@@ -188,10 +197,66 @@ def site_depuis_duckduckgo(nom: str, ville: str) -> str | None:
     return None
 
 
+# ─── Étape 1b : Inférence de domaine par le nom ───────────────────────────────
+
+def _slug(text: str) -> str:
+    text = unicodedata.normalize("NFD", text).encode("ascii", "ignore").decode()
+    return re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+
+
+def _mots_distinctifs(nom: str) -> list[str]:
+    nom_clean = re.sub(r"\(.*?\)", "", nom).strip()
+    mots = re.split(r"[\s\-/&,.']+", nom_clean)
+    return [m for m in mots if len(m) > 2 and m.lower() not in MOTS_EXCLUS_DOMAINE]
+
+
+def _candidats_domaine(nom: str, ville: str) -> list[str]:
+    mots = _mots_distinctifs(nom)
+    if not mots:
+        return []
+    candidates = []
+    for combo in [mots[:3], mots[:2], mots[:1]]:
+        base = _slug(" ".join(combo))
+        for tld in (".fr", ".com"):
+            candidates.append(f"https://www.{base}{tld}")
+            candidates.append(f"https://{base}{tld}")
+        if ville and len(combo) == 1:
+            base_v = _slug(" ".join(combo) + " " + ville)
+            for tld in (".fr", ".com"):
+                candidates.append(f"https://www.{base_v}{tld}")
+    return list(dict.fromkeys(candidates))
+
+
+def _valider_domaine(url: str, nom: str) -> bool:
+    """Vérifie que le site contient au moins 40% des mots distinctifs du nom."""
+    try:
+        r = requests.get(url, headers=HEADERS, timeout=6, allow_redirects=True)
+        if r.status_code >= 400:
+            return False
+        mots = _mots_distinctifs(nom)
+        if not mots:
+            return False
+        texte = BeautifulSoup(r.text, "html.parser").get_text().lower()
+        hits = sum(1 for m in mots if m.lower() in texte)
+        return hits / len(mots) >= 0.4
+    except Exception:
+        return False
+
+
+def site_depuis_inference(nom: str, ville: str) -> str | None:
+    for url in _candidats_domaine(nom, ville)[:8]:
+        if _valider_domaine(url, nom):
+            return url
+    return None
+
+
 def trouver_site(siren: str, nom: str, ville: str) -> tuple[str | None, str]:
     site = site_depuis_api_gouv(siren)
     if site:
         return site, "api_gouv"
+    site = site_depuis_inference(nom, ville)
+    if site:
+        return site, "inference_domaine"
     site = site_depuis_duckduckgo(nom, ville)
     if site:
         return site, "duckduckgo"
