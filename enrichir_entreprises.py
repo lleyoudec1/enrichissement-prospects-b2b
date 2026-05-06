@@ -157,21 +157,32 @@ def site_depuis_duckduckgo(nom: str, ville: str) -> str | None:
 
     soup = BeautifulSoup(r.text, "html.parser")
 
+    def est_url_propre(url: str) -> bool:
+        """Rejette les URLs de tracking, pubs et redirections DDG."""
+        PATTERNS_REJETES = (
+            "duckduckgo.com", "bing.com/aclick", "y.js?", "clickserve",
+            "dartserch", "redirect", "doubleclick", "ad_domain",
+        )
+        return (
+            url.startswith("http")
+            and not is_blacklisted(url)
+            and not any(p in url for p in PATTERNS_REJETES)
+        )
+
     # Premier résultat non blacklisté parmi les liens de résultats
     for a in soup.select("a.result__a"):
-        href = a.get("href", "")
-        if href and not is_blacklisted(href):
-            href = href.strip()
-            if not href.startswith("http"):
-                href = "https://" + href
+        href = a.get("href", "").strip()
+        if not href.startswith("http"):
+            href = "https://" + href
+        if est_url_propre(href):
             return href
 
-    # Fallback : URLs affichées dans .result__url
+    # Fallback : URLs affichées dans .result__url (texte propre sans tracking)
     for a in soup.select(".result__url"):
         href = a.get_text(strip=True)
-        if href and not is_blacklisted(href):
-            if not href.startswith("http"):
-                href = "https://" + href
+        if not href.startswith("http"):
+            href = "https://" + href
+        if est_url_propre(href):
             return href
 
     return None
