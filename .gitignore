@@ -1,0 +1,16 @@
+# Données sensibles — ne jamais versionner
+*.xlsx
+*.xls
+*.csv
+
+# Fichiers de progression et logs
+enrichissement_progress*.json
+log*.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+venv/
+.venv/
